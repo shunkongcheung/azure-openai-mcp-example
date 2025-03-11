@@ -1,0 +1,28 @@
+{
+  "name": "openai-mcp-example",
+  "version": "1.0.0",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start:server": "tsc && node build/server.js",
+    "start:client": "tsc && node build/client.js",
+    "inspect:server": "npx @modelcontextprotocol/inspector node build/server.js"
+  },
+  "keywords": [],
+  "author": "Wassim Chegham <github@wassim.dev>",
+  "license": "MIT",
+  "description": "",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.6.1",
+    "dotenv": "^16.4.7",
+    "express": "^5.0.1",
+    "openai": "^4.86.2",
+    "type": "^2.7.3",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^20.11.24",
+    "typescript": "^5.3.3"
+  }
+}
