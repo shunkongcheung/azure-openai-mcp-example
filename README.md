@@ -12,7 +12,7 @@ To get started with this project, follow the steps below:
 - npm
 - An OpenAI compatible endpoint:
   - An OpenAI API key
-  - Or, if you are using Azure OpenAI, you need to have an [Azure OpenAI resource](https://learn.microsoft.com/en-us/azure/ai-services/openai/chatgpt-quickstart?tabs=keyless%2Ctypescript-keyless%2Cpython-new%2Ccommand-line&pivots=programming-language-javascript) and the corresponding endpoint.
+  - Or, if you are using Azure OpenAI, you need to have an [Azure OpenAI resource](https://learn.microsoft.com/azure/ai-services/openai/chatgpt-quickstart?tabs=keyless%2Ctypescript-keyless%2Cpython-new%2Ccommand-line&pivots=programming-language-javascript) and the corresponding endpoint.
 
 ### Installation
 
@@ -48,13 +48,19 @@ OPENAI_API_KEY=your_openai_api_key
 
 ### Usage
 
-1. Run the MCP server:
+1. (Optional) If you are using Azure OpenAI, please log in first using the [Azure CLI](https://learn.microsoft.com/cli/azure/) command:
+
+   ```bash
+   az login
+   ```
+
+2. Run the MCP server:
 
    ```bash
    npm run start:server
    ```
 
-2. Run the MCP client:
+3. Run the MCP client:
    ```bash
    npm run start:client
    ```
