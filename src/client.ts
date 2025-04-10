@@ -102,7 +102,7 @@ const getTools = async (client: Client): Promise<ChatCompletionTool[]> => {
 };
 
 const fetchOpenAiResponse = async (
-  openai: AzureOpenAI,
+  openai: AzureOpenAI | OpenAI,
   props: {
     deployment: string;
     messages: ChatCompletionMessageParam[];
