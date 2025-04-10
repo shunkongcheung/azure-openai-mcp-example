@@ -18,12 +18,14 @@
     "dotenv": "^16.4.7",
     "express": "^5.0.1",
     "openai": "^4.93.0 ",
+    "pg": "^8.14.1",
     "type": "^2.7.3",
     "zod": "^3.24.2"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",
     "@types/node": "^20.11.24",
+    "@types/pg": "^8.11.11",
     "typescript": "^5.3.3"
   }
 }
