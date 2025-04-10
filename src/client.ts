@@ -1,14 +1,47 @@
+import { AzureCliCredential, DefaultAzureCredential, getBearerTokenProvider } from "@azure/identity";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { Transport } from "@modelcontextprotocol/sdk/shared/transport";
 import dotenv from "dotenv";
-import OpenAI from "openai";
+import { AzureOpenAI, OpenAI } from "openai";
 import { z } from "zod"; // Import zod for schema validation
 dotenv.config();
 
+// You will need to set these environment variables or edit the following values
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-if (!OPENAI_API_KEY) {
-  throw new Error("OPENAI_API_KEY is not set");
+const endpoint =
+  process.env["AZURE_OPENAI_ENDPOINT"] as string;
+const apiVersion = "2025-01-01-preview";
+const deployment = "gpt-4o";
+let client: AzureOpenAI | OpenAI | null = null;
+
+if (OPENAI_API_KEY && endpoint) {
+  throw new Error(
+    "You cannot set both OPENAI_API_KEY and AZURE_OPENAI_ENDPOINT. Please use one or the other."
+  );
+}
+
+if (OPENAI_API_KEY && !endpoint) {
+  console.log("Using OpenAI API Key");
+  // Initialize the OpenAI client with API Key
+  client = new OpenAI({
+    apiKey: OPENAI_API_KEY,
+  });
+}
+else if (!OPENAI_API_KEY && endpoint) {
+  // Initialize the AzureOpenAI client with Entra ID (Azure AD) authentication (keyless)
+  console.log("Using Azure OpenAI Keyless authentication");
+  
+  // Initialize the DefaultAzureCredential
+  const credential = new DefaultAzureCredential();
+  const scope = "https://cognitiveservices.azure.com/.default";
+  const azureADTokenProvider = getBearerTokenProvider(credential, scope);
+  client = new AzureOpenAI({
+    endpoint,
+    azureADTokenProvider,
+    apiVersion,
+    deployment,
+  });
 }
 
 function openAiToolAdapter(tool: {
@@ -35,15 +68,16 @@ function openAiToolAdapter(tool: {
 
 class MCPClient {
   private mcp: Client;
-  private openai: OpenAI;
+  private openai: AzureOpenAI | OpenAI;
   private tools: Array<any> = [];
   private transport: Transport | null = null;
 
   constructor() {
-    this.openai = new OpenAI({
-      apiKey: OPENAI_API_KEY,
-    });
-    this.mcp = new Client({ name: "mcp-client", version: "1.0.0" });
+    if (!client) {
+      throw new Error("OpenAI client is not initialized");
+    }
+    this.openai = client;
+    this.mcp = new Client({ name: "azure-mcp-client", version: "1.0.0" });
   }
 
   async connectToServer(serverUrl: string) {
@@ -69,15 +103,15 @@ class MCPClient {
     const messages: any[] = [
       {
         role: "user",
-        content: query,
+        content: query
       },
     ];
 
     console.log("Tools: ", JSON.stringify(this.tools, null, 2));
 
     let response = await this.openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
-      max_tokens: 1000,
+      model: deployment,
+      max_tokens: 800,
       messages,
       tools: this.tools,
     });
@@ -101,14 +135,12 @@ class MCPClient {
     });
 
     response = await this.openai.chat.completions.create({
-        model: "gpt-3.5-turbo",
-        max_tokens: 1000,
-        messages,
-      });
+      model: deployment,
+      max_tokens: 800,
+      messages,
+    });
 
-      finalText.push(
-        response.choices[0].message.content || "??"
-      );
+    finalText.push(response.choices[0].message.content || "??");
 
     return finalText.join("\n");
   }
@@ -141,12 +173,12 @@ class MCPClient {
   }
 }
 
-const client = new MCPClient();
-await client.connectToServer("http://localhost:4321/sse");
+const mcpClient = new MCPClient();
+await mcpClient.connectToServer("http://localhost:4321/sse");
 console.log("Connected to MCP server");
 
 const query = "What is the sum of 2 and 3?";
-const result = await client.processQuery(query);
+const result = await mcpClient.processQuery(query);
 console.log("Final result: ", result);
 
-// await client.cleanup();
+await mcpClient.cleanup();
