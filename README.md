@@ -1,4 +1,4 @@
-# OpenAI MCP Example
+# Azure OpenAI MCP Example
 
 This project showcases how to use the MCP protocol with OpenAI. It provides a simple example to interact with OpenAI's API seamlessly via an MCP server and client.
 
