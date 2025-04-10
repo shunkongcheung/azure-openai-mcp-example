@@ -1,184 +1,167 @@
-import { AzureCliCredential, DefaultAzureCredential, getBearerTokenProvider } from "@azure/identity";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
-import { Transport } from "@modelcontextprotocol/sdk/shared/transport";
 import dotenv from "dotenv";
 import { AzureOpenAI, OpenAI } from "openai";
-import { z } from "zod"; // Import zod for schema validation
-dotenv.config();
+import {
+  ChatCompletion,
+  ChatCompletionMessageParam,
+  ChatCompletionTool,
+} from "openai/resources/chat";
 
-// You will need to set these environment variables or edit the following values
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const endpoint =
-  process.env["AZURE_OPENAI_ENDPOINT"] as string;
-const apiVersion = "2025-01-01-preview";
-const deployment = "gpt-4o";
-let client: AzureOpenAI | OpenAI | null = null;
+function initializeEnvironment() {
+  dotenv.config();
+  const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+  const endpoint = process.env["AZURE_OPENAI_ENDPOINT"] as string;
 
-if (OPENAI_API_KEY && endpoint) {
-  throw new Error(
-    "You cannot set both OPENAI_API_KEY and AZURE_OPENAI_ENDPOINT. Please use one or the other."
-  );
+  if (!OPENAI_API_KEY || !endpoint) {
+    throw new Error("Missing required environment variables");
+  }
+
+  return { OPENAI_API_KEY, endpoint };
 }
 
-if (OPENAI_API_KEY && !endpoint) {
-  console.log("Using OpenAI API Key");
-  // Initialize the OpenAI client with API Key
-  client = new OpenAI({
-    apiKey: OPENAI_API_KEY,
-  });
-}
-else if (!OPENAI_API_KEY && endpoint) {
-  // Initialize the AzureOpenAI client with Entra ID (Azure AD) authentication (keyless)
-  console.log("Using Azure OpenAI Keyless authentication");
-  
-  // Initialize the DefaultAzureCredential
-  const credential = new DefaultAzureCredential();
-  const scope = "https://cognitiveservices.azure.com/.default";
-  const azureADTokenProvider = getBearerTokenProvider(credential, scope);
-  client = new AzureOpenAI({
-    endpoint,
-    azureADTokenProvider,
-    apiVersion,
-    deployment,
-  });
-}
-
-function openAiToolAdapter(tool: {
-  name: string;
-  description?: string;
-  input_schema: any;
+function createOpenAIClient({
+  endpoint,
+  apiKey,
+  deployment,
+}: {
+  endpoint: string;
+  apiKey: string;
+  deployment: string;
 }) {
-  // Create a zod schema based on the input_schema
-  const schema = z.object(tool.input_schema);
+  return new AzureOpenAI({
+    endpoint,
+    apiVersion: "2025-01-01-preview",
+    deployment,
+    apiKey,
+  });
+}
 
-  return {
+const getMcpClient = async (serverUrl: string) => {
+  const client = new Client({ name: "azure-mcp-client", version: "1.0.0" });
+  const transport = new SSEClientTransport(new URL(serverUrl));
+  await client.connect(transport);
+
+  return client;
+};
+
+const getTools = async (client: Client): Promise<ChatCompletionTool[]> => {
+  const toolsResult = await client.listTools();
+  return toolsResult.tools.map((tool) => ({
     type: "function",
     function: {
       name: tool.name,
       description: tool.description,
       parameters: {
         type: "object",
-        properties: tool.input_schema.properties,
-        required: tool.input_schema.required,
+        properties: tool.inputSchema.properties,
+        required: tool.inputSchema.required,
       },
     },
-  };
-}
+  }));
+};
 
-class MCPClient {
-  private mcp: Client;
-  private openai: AzureOpenAI | OpenAI;
-  private tools: Array<any> = [];
-  private transport: Transport | null = null;
-
-  constructor() {
-    if (!client) {
-      throw new Error("OpenAI client is not initialized");
-    }
-    this.openai = client;
-    this.mcp = new Client({ name: "azure-mcp-client", version: "1.0.0" });
+const fetchOpenAiResponse = async (
+  openai: AzureOpenAI,
+  props: {
+    deployment: string;
+    messages: ChatCompletionMessageParam[];
+    tools: ChatCompletionTool[];
   }
+) => {
+  return await openai.chat.completions.create({
+    model: props.deployment,
+    max_tokens: 800,
+    messages: props.messages,
+    tools: props.tools,
+  });
+};
 
-  async connectToServer(serverUrl: string) {
-    try {
-      this.transport = new SSEClientTransport(new URL(serverUrl));
-      await this.mcp.connect(this.transport);
-
-      const toolsResult = await this.mcp.listTools();
-      this.tools = toolsResult.tools.map((tool) => {
-        return openAiToolAdapter({
-          name: tool.name,
-          description: tool.description,
-          input_schema: tool.inputSchema,
-        });
-      });
-    } catch (e) {
-      console.log("Failed to connect to MCP server: ", e);
-      throw e;
-    }
-  }
-
-  async processQuery(query: string) {
-    const messages: any[] = [
-      {
-        role: "user",
-        content: query
-      },
-    ];
-
-    console.log("Tools: ", JSON.stringify(this.tools, null, 2));
-
-    let response = await this.openai.chat.completions.create({
-      model: deployment,
-      max_tokens: 800,
-      messages,
-      tools: this.tools,
-    });
-
-    const finalText: string[] = [];
-    const toolResults: any[] = [];
-
-    console.log(
-      "Response from OpenAI: ",
-      JSON.stringify(response.choices, null, 2)
-    );
-    response.choices.map(async (choice) => {
-      const message = choice.message;
-      if (message.tool_calls) {
-        toolResults.push(
-          await this.callTools(message.tool_calls, toolResults, finalText)
-        );
-      } else {
-        finalText.push(message.content || "xx");
+const getMessagesFromChatCompletion = async (
+  response: ChatCompletion,
+  mcp: Client
+): Promise<string[]> => {
+  const messageResults = await Promise.all(
+    response.choices.map(async ({ message }) => {
+      if (!message.tool_calls) {
+        return message.content || "";
       }
-    });
 
-    response = await this.openai.chat.completions.create({
-      model: deployment,
-      max_tokens: 800,
-      messages,
-    });
-
-    finalText.push(response.choices[0].message.content || "??");
-
-    return finalText.join("\n");
-  }
-  async callTools(
-    tool_calls: OpenAI.Chat.Completions.ChatCompletionMessageToolCall[],
-    toolResults: any[],
-    finalText: string[]
-  ) {
-    for (const tool_call of tool_calls) {
-      const toolName = tool_call.function.name;
-      const args = tool_call.function.arguments;
-
-      console.log(`Calling tool ${toolName} with args ${JSON.stringify(args)}`);
-
-      const toolResult = await this.mcp.callTool({
-        name: toolName,
-        arguments: JSON.parse(args),
-      });
-      toolResults.push({
-        name: toolName,
-        result: toolResult,
-      });
-      finalText.push(
-        `[Calling tool ${toolName} with args ${JSON.stringify(args)}]`
+      const toolResults = await Promise.allSettled(
+        message.tool_calls.map((tool_call) => {
+          const toolName = tool_call.function.name;
+          const args = tool_call.function.arguments;
+          return mcp.callTool({
+            name: toolName,
+            arguments: JSON.parse(args),
+          });
+        })
       );
-    }
-  }
-  async cleanup() {
-    await this.mcp.close();
-  }
-}
 
-const mcpClient = new MCPClient();
-await mcpClient.connectToServer("http://localhost:4321/sse");
-console.log("Connected to MCP server");
+      const toolTexts = toolResults
+        .filter((result) => result.status === "fulfilled")
+        .map((result) => result.value)
+        .map((result) => result.content as { type: "text"; text: string }[])
+        .flat()
+        .map((item) => item.text)
+        .join("\n");
 
-const query = "What is the sum of 2 and 3?";
-const result = await mcpClient.processQuery(query);
-console.log("Final result: ", result);
+      return [message.content || "", ...toolTexts];
+    })
+  );
 
-await mcpClient.cleanup();
+  return messageResults.flat().filter(Boolean);
+};
+
+const main = async () => {
+  const SERVER_URL = "http://localhost:4321/sse";
+  const DEPLOYMENT = "gpt-4o";
+  const { OPENAI_API_KEY, endpoint } = initializeEnvironment();
+  const openai = createOpenAIClient({
+    endpoint,
+    apiKey: OPENAI_API_KEY,
+    deployment: DEPLOYMENT,
+  });
+  console.log("Connected to OpenAI Agent.");
+
+  const mcpClient = await getMcpClient(SERVER_URL);
+  console.log("Connected to MCP server");
+
+  const tools = await getTools(mcpClient);
+  console.log("Tools: ", JSON.stringify(tools, null, 2));
+
+  const messages: ChatCompletionMessageParam[] = [
+    {
+      role: "system",
+      content: "This is an agent for teaching kindergarten math.",
+    },
+    {
+      role: "user",
+      // content: "What is the sum of 2 and 3?",
+      // content: "How many legs do 2 cats and 3 dogs have?",
+      content: "Why does the sun shine?",
+    },
+  ];
+  console.log("Message: ", JSON.stringify(messages, null, 2));
+
+  const response = await fetchOpenAiResponse(openai, {
+    deployment: DEPLOYMENT,
+    messages,
+    tools,
+  });
+  console.log("Response: ", JSON.stringify(response, null, 2));
+
+  const messagesFromResponse = await getMessagesFromChatCompletion(
+    response,
+    mcpClient
+  );
+  console.log(
+    "Messages from response: ",
+    JSON.stringify(messagesFromResponse, null, 2)
+  );
+
+  await mcpClient.close();
+  console.log("Disconnected from MCP server.");
+};
+
+main();
