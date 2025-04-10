@@ -62,43 +62,134 @@ OPENAI_API_KEY=your_openai_api_key
 
 3. Run the MCP client:
    ```bash
-   npm run start:client
+   npm run start:client "What is the sum of legs in 2 dogs and 1 cat, use tools if possible. Explain the math step by step"
    ```
 
 You should see a response like the following:
 
 ```text
-{
-  choices: [
+Message:  What is the sum of legs in 2 dogs and 1 cat, use tools if possible. Explain the math step by step
+Connected to OpenAI Agent.
+Connected to MCP server
+Tools:  [
+  {
+    "type": "function",
+    "function": {
+      "name": "calculate_sum",
+      "description": "Calculate the sum of two numbers",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "number"
+          },
+          "b": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "a",
+          "b"
+        ]
+      }
+    }
+  }
+]
+Message:  [
+  {
+    "role": "system",
+    "content": "This is an agent for teaching kindergarten math."
+  },
+  {
+    "role": "user",
+    "content": "What is the sum of legs in 2 dogs and 1 cat, use tools if possible. Explain the math step by step"     
+  }
+]
+Response:  {
+  "choices": [
     {
-      content_filter_results: [Object],
-      finish_reason: 'stop',
-      index: 0,
-      logprobs: null,
-      message: [Object]
+      "content_filter_results": {},
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": null,
+        "refusal": null,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "function": {
+              "arguments": "{\"a\": 4, \"b\": 4}",
+              "name": "calculate_sum"
+            },
+            "id": "call_jWEdy99mN8wUaTp5cUYMrqvg",
+            "type": "function"
+          },
+          {
+            "function": {
+              "arguments": "{\"a\": 8, \"b\": 4}",
+              "name": "calculate_sum"
+            },
+            "id": "call_LLqfAy7m7DOGZeLCSxM5njwA",
+            "type": "function"
+          }
+        ]
+      }
     }
   ],
-  created: 1744274007,
-  id: 'chatcmpl-BKhdf8LcWBezaWxDr2WDPi1uZDfZl',
-  model: 'gpt-4o-2024-11-20',
-  object: 'chat.completion',
-  prompt_filter_results: [ { prompt_index: 0, content_filter_results: [Object] } ],
-  system_fingerprint: 'fp_ee1d74bde0',
-  usage: {
-    completion_tokens: 14,
-    completion_tokens_details: {
-      accepted_prediction_tokens: 0,
-      audio_tokens: 0,
-      reasoning_tokens: 0,
-      rejected_prediction_tokens: 0
+  "created": 1744319081,
+  "id": "chatcmpl-BKtMfEQnAKzYf2InrL2TeaJudsPhN",
+  "model": "gpt-4o-2024-11-20",
+  "object": "chat.completion",
+  "prompt_filter_results": [
+    {
+      "prompt_index": 0,
+      "content_filter_results": {
+        "hate": {
+          "filtered": false,
+          "severity": "safe"
+        },
+        "jailbreak": {
+          "filtered": false,
+          "detected": false
+        },
+        "self_harm": {
+          "filtered": false,
+          "severity": "safe"
+        },
+        "sexual": {
+          "filtered": false,
+          "severity": "safe"
+        },
+        "violence": {
+          "filtered": false,
+          "severity": "safe"
+        }
+      }
+    }
+  ],
+  "system_fingerprint": "fp_ee1d74bde0",
+  "usage": {
+    "completion_tokens": 53,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": 0,
+      "audio_tokens": 0,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": 0
     },
-    prompt_tokens: 18,
-    prompt_tokens_details: { audio_tokens: 0, cached_tokens: 0 },
-    total_tokens: 32
+    "prompt_tokens": 83,
+    "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0
+    },
+    "total_tokens": 136
   }
 }
-Final result:  [Calling tool calculate_sum with args "{\"a\":2,\"b\":3}"]
-The sum of 2 and 3 is **5**.
+Messages from response:  [
+  "The sum of 4 and 4 is 8.",
+  "The sum of 8 and 4 is 12."
+]
+Disconnected from MCP server.
 ```
 
 ## License

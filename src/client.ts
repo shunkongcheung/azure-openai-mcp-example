@@ -8,6 +8,20 @@ import {
   ChatCompletionTool,
 } from "openai/resources/chat";
 
+const getMessageFromArg = () => {
+  const DEFAULT_MESSAGE = "What is the sum of 2 and 3?";
+  const args = process.argv;
+  const idxOfLastSystemArg = args.findIndex((arg) => arg.includes("client.js"));
+  const idxNotFound = idxOfLastSystemArg === -1;
+  const idxIsLastArg = idxOfLastSystemArg === args.length - 1;
+
+  if (idxNotFound || idxIsLastArg) {
+    return DEFAULT_MESSAGE;
+  }
+
+  return args[idxOfLastSystemArg + 1];
+};
+
 function initializeEnvironment() {
   dotenv.config();
   const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
@@ -103,8 +117,7 @@ const getMessagesFromChatCompletion = async (
         .map((result) => result.value)
         .map((result) => result.content as { type: "text"; text: string }[])
         .flat()
-        .map((item) => item.text)
-        .join("\n");
+        .map((item) => item.text);
 
       return [message.content || "", ...toolTexts];
     })
@@ -116,6 +129,10 @@ const getMessagesFromChatCompletion = async (
 const main = async () => {
   const SERVER_URL = "http://localhost:4321/sse";
   const DEPLOYMENT = "gpt-4o";
+
+  const message = getMessageFromArg();
+  console.log("Message: ", message);
+
   const { OPENAI_API_KEY, endpoint } = initializeEnvironment();
   const openai = createOpenAIClient({
     endpoint,
@@ -137,9 +154,10 @@ const main = async () => {
     },
     {
       role: "user",
-      // content: "What is the sum of 2 and 3?",
-      // content: "How many legs do 2 cats and 3 dogs have?",
-      content: "Why does the sun shine?",
+      content: message,
+      // content: "What is the sum of 2 and 3?", // basic math question
+      // content: "How many legs do 2 cats and 3 dogs have?", // require some math and logic
+      // content: "Why does the sun shine?", // irrelevant question
     },
   ];
   console.log("Message: ", JSON.stringify(messages, null, 2));
