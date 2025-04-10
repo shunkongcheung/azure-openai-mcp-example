@@ -1,3 +1,7 @@
+import {
+  DefaultAzureCredential,
+  getBearerTokenProvider,
+} from "@azure/identity";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import dotenv from "dotenv";
@@ -43,9 +47,31 @@ function createOpenAIClient({
   apiKey: string;
   deployment: string;
 }) {
+  const apiVersion = "2025-01-01-preview";
+
+  if (apiKey && !endpoint) {
+    console.log("Using OpenAI API Key");
+    // Initialize the OpenAI client with API Key
+    return new OpenAI({ apiKey });
+  } else if (!apiKey && endpoint) {
+    // Initialize the AzureOpenAI client with Entra ID (Azure AD) authentication (keyless)
+    console.log("Using Azure OpenAI Keyless authentication");
+
+    // Initialize the DefaultAzureCredential
+    const credential = new DefaultAzureCredential();
+    const scope = "https://cognitiveservices.azure.com/.default";
+    const azureADTokenProvider = getBearerTokenProvider(credential, scope);
+    return new AzureOpenAI({
+      endpoint,
+      azureADTokenProvider,
+      apiVersion,
+      deployment,
+    });
+  }
+
   return new AzureOpenAI({
     endpoint,
-    apiVersion: "2025-01-01-preview",
+    apiVersion,
     deployment,
     apiKey,
   });
