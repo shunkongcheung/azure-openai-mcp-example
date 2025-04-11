@@ -40,7 +40,7 @@ export const getDb = async (inConfig: IConfig, logger: Logger) => {
   const database = await pool.connect();
 
   const result = await database.query("SELECT NOW() AS now");
-  logger.debug("Connected to database:", result.rows[0].now);
+  logger.log("Connected to database:", result.rows[0].now);
 
   return database;
 };
@@ -59,6 +59,7 @@ export const executeQueryWithRetry = async <T extends QueryResultRow = any>(
         `Executing query (attempt ${retries + 1}/${maxRetries}):`,
         sql
       );
+
       const result = await client.query(sql);
       return result as pg.QueryResult<T>;
     } catch (inErr) {
@@ -80,7 +81,7 @@ export const executeQueryWithRetry = async <T extends QueryResultRow = any>(
         retries++;
         await new Promise((resolve) => setTimeout(resolve, 1000 * retries)); // Exponential backoff
       } else {
-        client.release();
+        // client.release();
         // For other errors, don't retry
         throw err;
       }
@@ -104,4 +105,34 @@ export const getDbSchema = async (
   logger.debug("Database schema:", tables);
 
   return tables;
+};
+
+export const getTableSchema = async (
+  client: PoolClient,
+  tableName: string,
+  logger: Logger
+): Promise<
+  { column_name: string; data_type: string; is_nullable: string }[]
+> => {
+  const sql = `SELECT column_name, data_type, is_nullable
+FROM information_schema.columns
+WHERE table_name = '${tableName}';`;
+
+  logger.log("Retrieving table schema:", sql);
+
+  const result = await executeQueryWithRetry<{
+    column_name: string;
+    data_type: string;
+    is_nullable: string;
+  }>(client, sql, logger);
+  const columns =
+    result?.rows.map((row) => ({
+      column_name: row.column_name,
+      data_type: row.data_type,
+      is_nullable: row.is_nullable,
+    })) ?? [];
+
+  logger.debug(`Table schema for ${tableName}:`, columns);
+
+  return columns;
 };
