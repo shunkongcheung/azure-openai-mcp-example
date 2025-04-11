@@ -1,11 +1,14 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import {
+  McpServer,
+  ResourceTemplate,
+} from "@modelcontextprotocol/sdk/server/mcp.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import dotenv from "dotenv";
 import express from "express";
 import { z } from "zod";
 import { getDefaultLogger } from "./logger.js";
 import { PoolClient } from "pg";
-import { executeQueryWithRetry, getDb, getDbSchema } from "./db.js";
+import { executeQueryWithRetry, getDb, getTableSchema } from "./db.js";
 
 dotenv.config();
 
@@ -19,7 +22,7 @@ const DB_HOST = config.DB_HOST ?? "database";
 const DB_PORT = config.DB_PORT ?? 5432;
 
 app.listen(4321, async () => {
-  const logger = getDefaultLogger();
+  const logger = getDefaultLogger({ silent: true });
   let transport: SSEServerTransport | null = null;
   let database: PoolClient | null = null;
 
@@ -51,7 +54,6 @@ app.listen(4321, async () => {
     },
     logger
   );
-  const tables = await getDbSchema(database, logger);
   logger.log("Database connection established.");
 
   app.get("/sse", async (_req, res) => {
@@ -61,67 +63,103 @@ app.listen(4321, async () => {
   });
 
   app.post("/messages", (req, res) => {
+    logger.log("Message received.");
     if (transport) {
       transport.handlePostMessage(req, res);
+    } else {
+      logger.error("Transport is not initialized.");
     }
   });
 
+  server.resource(
+    "greeting",
+    new ResourceTemplate("greeting://{name}", { list: undefined }),
+    async (uri, { name }) => {
+      logger.log(`Greeting to ${name} requested.`);
+      return {
+        contents: [
+          {
+            uri: uri.href,
+            text: `Hello, ${name}!`,
+          },
+        ],
+      };
+    }
+  );
+
+  const listingTableSchema = await getTableSchema(database, "listing", logger);
+  server.prompt("query-database", "About querying the database", async () => {
+    logger.log(`Querying the database prompt requested.`);
+    return {
+      messages: [
+        {
+          role: "assistant",
+          content: {
+            type: "text",
+            text:
+              "The purpose of this chat is to respond to client based on a data from postgres database. " +
+              "This database contains information about airbnb listing in Toronto. " +
+              "Help the user search for a listing based on their needs. " +
+              "This postgres database contains a table named 'listing' Please use this table only. ",
+          },
+        },
+        {
+          role: "assistant",
+          content: {
+            type: "text",
+            text:
+              "The table 'listing' has the following columns: " +
+              JSON.stringify(listingTableSchema) +
+              ". " +
+              "You can use these columns to filter the data. " +
+              "Postgres database has a syntax where column name has to be double quoted when used as filter." +
+              "While the filter value has to be single quoted." +
+              "Please use the column name as the key and the value you want to filter as the value. " +
+              'e.g. SELECT * FROM "listing" where "listing_id" = \'Some value\';',
+          },
+        },
+        {
+          role: "assistant",
+          content: {
+            type: "text",
+            text:
+              "If you would like to form a SQL query based on number field, please provide the column name and the value you want to filter. " +
+              'e.g. SELECT * FROM "listing" where "price" = 100;',
+          },
+        },
+        {
+          role: "assistant",
+          content: {
+            type: "text",
+            text:
+              "If you would like to form a SQL query based on non-number text field, check what are the available options first" +
+              'For example, if you want to query by "buildType", you can use the following query to check what are the available options: ' +
+              'SELECT DISTINCT "buildType" FROM "listing";' +
+              "Then you can use the value from the result to form your query. ",
+          },
+        },
+      ],
+      description: "Provide the instruction when querying the database",
+    };
+  });
+
   server.tool(
-    "calculate_sum",
-    "Calculate the sum of two numbers",
+    "query",
+    `Issue query to database`,
     {
-      a: z.number(),
-      b: z.number(),
+      sql: z.string().describe("PostgreSQL query to execute"),
     },
     async (args) => {
-      logger.log("Received request to calculate sum:", { args });
+      logger.log("Received request to issue query on table:", args);
+      const result = await executeQueryWithRetry(database, args.sql, logger);
       return await Promise.resolve({
         content: [
           {
             type: "text",
-            text: `The sum of ${args.a} and ${args.b} is ${args.a + args.b}.`,
+            text: JSON.stringify(result?.rows),
           },
         ],
       });
     }
   );
-
-  server.tool(
-    "database_schema",
-    "return the schema of the database",
-    {},
-    async () => {
-      logger.log("Received request to check database schema");
-      return await Promise.resolve({
-        content: [
-          {
-            type: "text",
-            text: tables.join("\n"),
-          },
-        ],
-      });
-    }
-  );
-
-  tables.map((table) => {
-    server.tool(
-      `table_${table}`,
-      `Issue query on table ${table}`,
-      {
-        sql: z.string().describe("SQL query to execute"),
-      },
-      async (args) => {
-        logger.log("Received request to issue query on table:", { args });
-        const result = await executeQueryWithRetry(database, args.sql, logger);
-        return await Promise.resolve({
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(result?.rows),
-            },
-          ],
-        });
-      }
-    );
-  });
 });
