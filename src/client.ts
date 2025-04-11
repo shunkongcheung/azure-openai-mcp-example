@@ -11,6 +11,7 @@ import {
   ChatCompletionMessageParam,
   ChatCompletionTool,
 } from "openai/resources/chat";
+import { getDefaultLogger } from "./logger.js";
 
 const getMessageFromArg = () => {
   const DEFAULT_MESSAGE = "What is the sum of 2 and 3?";
@@ -50,12 +51,10 @@ function createOpenAIClient({
   const apiVersion = "2025-01-01-preview";
 
   if (apiKey && !endpoint) {
-    console.log("Using OpenAI API Key");
     // Initialize the OpenAI client with API Key
     return new OpenAI({ apiKey });
   } else if (!apiKey && endpoint) {
     // Initialize the AzureOpenAI client with Entra ID (Azure AD) authentication (keyless)
-    console.log("Using Azure OpenAI Keyless authentication");
 
     // Initialize the DefaultAzureCredential
     const credential = new DefaultAzureCredential();
@@ -78,7 +77,10 @@ function createOpenAIClient({
 }
 
 const getMcpClient = async (serverUrl: string) => {
-  const client = new Client({ name: "azure-mcp-client", version: "1.0.0" });
+  const client = new Client(
+    { name: "azure-mcp-client", version: "1.0.0" },
+    { capabilities: { tools: {}, resources: {}, prompts: {} } }
+  );
   const transport = new SSEClientTransport(new URL(serverUrl));
   await client.connect(transport);
 
@@ -120,11 +122,11 @@ const fetchOpenAiResponse = async (
 const getMessagesFromChatCompletion = async (
   response: ChatCompletion,
   mcp: Client
-): Promise<string[]> => {
+): Promise<ChatCompletionMessageParam[]> => {
   const messageResults = await Promise.all(
     response.choices.map(async ({ message }) => {
       if (!message.tool_calls) {
-        return message.content || "";
+        return [];
       }
 
       const toolResults = await Promise.allSettled(
@@ -138,26 +140,49 @@ const getMessagesFromChatCompletion = async (
         })
       );
 
-      const toolTexts = toolResults
+      const MAX_TOOL_RESPONSE_FOR_THROTTLING = 10000;
+      const allToolResponses = toolResults
         .filter((result) => result.status === "fulfilled")
-        .map((result) => result.value)
-        .map((result) => result.content as { type: "text"; text: string }[])
-        .flat()
-        .map((item) => item.text);
+        .map(
+          (result) =>
+            result.value as { content: { type: string; text: string }[] }
+        )
+        .flatMap((result) => result.content)
+        .map((result) => ({
+          ...result,
+          text: result.text.slice(0, MAX_TOOL_RESPONSE_FOR_THROTTLING),
+        }));
 
-      return [message.content || "", ...toolTexts];
+      const toolResponses = allToolResponses.map<ChatCompletionMessageParam>(
+        (result) => ({
+          role: "assistant",
+          content:
+            "Use the following resource, respond to the initial question from user :" +
+            result.text,
+        })
+      );
+
+      const systemMessage: ChatCompletionMessageParam | null = message.content
+        ? { role: "system", content: message.content }
+        : null;
+
+      return systemMessage ? [systemMessage, ...toolResponses] : toolResponses;
     })
   );
 
   return messageResults.flat().filter(Boolean);
 };
 
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 const main = async () => {
   const SERVER_URL = "http://localhost:4321/sse";
   const DEPLOYMENT = "gpt-4o";
 
+  const logger = getDefaultLogger({ silent: true });
+
   const message = getMessageFromArg();
-  console.log("Message: ", message);
+  logger.log("Message: ", message);
 
   const { OPENAI_API_KEY, endpoint } = initializeEnvironment();
   const openai = createOpenAIClient({
@@ -165,47 +190,109 @@ const main = async () => {
     apiKey: OPENAI_API_KEY,
     deployment: DEPLOYMENT,
   });
-  console.log("Connected to OpenAI Agent.");
+  logger.log("Connected to OpenAI Agent.");
 
   const mcpClient = await getMcpClient(SERVER_URL);
-  console.log("Connected to MCP server");
+  logger.log("Connected to MCP server");
 
   const tools = await getTools(mcpClient);
-  console.log("Tools: ", JSON.stringify(tools, null, 2));
+  logger.debug("Tools: ", JSON.stringify(tools, null, 2));
+
+  const resources = await mcpClient.listResourceTemplates();
+  logger.debug("Resources: ", JSON.stringify(resources, null, 2));
+
+  const greeting = await mcpClient.readResource({
+    uri: "greeting://hello",
+  });
+  logger.debug("Greeting: ", JSON.stringify(greeting, null, 2));
+
+  // const tableSchemas = await mcpClient.readResource({ uri: "table://listing" });
+  // logger.debug("Table schemas: ", JSON.stringify(tableSchemas, null, 2));
+
+  const queryDatabasePrompt = await mcpClient.getPrompt({
+    name: "query-database",
+  });
+  logger.debug(
+    "Database prompt: ",
+    JSON.stringify(queryDatabasePrompt, null, 2)
+  );
 
   const messages: ChatCompletionMessageParam[] = [
-    {
-      role: "system",
-      content: "This is an agent for teaching kindergarten math.",
-    },
+    ...queryDatabasePrompt.messages.map<ChatCompletionMessageParam>(
+      (message) => ({
+        role: message.role,
+        content: message.content.text as string,
+      })
+    ),
+    // {
+    //   role: "assistant",
+    //   content:
+    //     "When querying for supportive data, e.g. selecting distinct value from a column, " +
+    //     "feel free to retrieve all value from the database if necessary." +
+    //     "If needed, impose a limit of 5 rows. " +
+    //     "Or select only the column that is relevant to the user. " +
+    //     "The reason is to limit the amount of data to process.",
+    // },
     {
       role: "user",
       content: message,
-      // content: "What is the sum of 2 and 3?", // basic math question
-      // content: "How many legs do 2 cats and 3 dogs have?", // require some math and logic
-      // content: "Why does the sun shine?", // irrelevant question
     },
   ];
-  console.log("Message: ", JSON.stringify(messages, null, 2));
+  logger.log("Message: ", JSON.stringify(messages, null, 2));
 
-  const response = await fetchOpenAiResponse(openai, {
+  let response = await fetchOpenAiResponse(openai, {
     deployment: DEPLOYMENT,
     messages,
     tools,
   });
-  console.log("Response: ", JSON.stringify(response, null, 2));
+  logger.log(
+    "First Response: ",
+    response.choices[0].message.content,
+    response.choices[0].message.tool_calls
+  );
 
-  const messagesFromResponse = await getMessagesFromChatCompletion(
-    response,
-    mcpClient
-  );
-  console.log(
-    "Messages from response: ",
-    JSON.stringify(messagesFromResponse, null, 2)
-  );
+  let isDone = false;
+  for (let idx = 0; !isDone; idx++) {
+    const messagesFromResponse = await getMessagesFromChatCompletion(
+      response,
+      mcpClient
+    );
+
+    const printLimit = 1000;
+    const printContent = JSON.stringify(messagesFromResponse, null, 2);
+    logger.log(
+      `${idx} - Messages from response: `,
+      printContent.length > printLimit
+        ? printContent.slice(0, printLimit) + "..."
+        : printContent
+    );
+
+    isDone = messagesFromResponse.length === 0;
+
+    if (!isDone) {
+      const seconds = 80;
+      logger.log(`Starting wait for ${seconds} seconds...`);
+      await delay(seconds * 1000);
+      logger.log(`Finish waiting, continue to next iteration...`);
+
+      response = await fetchOpenAiResponse(openai, {
+        deployment: DEPLOYMENT,
+        messages: [...messages, ...messagesFromResponse],
+        tools,
+      });
+
+      logger.log(
+        `${idx} response update: `,
+        response.choices[0].message.content,
+        response.choices[0].message.tool_calls
+      );
+    }
+  }
+
+  logger.log("Final Response: ", response.choices[0].message.content);
 
   await mcpClient.close();
-  console.log("Disconnected from MCP server.");
+  logger.log("Disconnected from MCP server.");
 };
 
 main();
